@@ -36,7 +36,6 @@ codeunit 62017 "D4P BC Session Helper"
         Endpoint := '/applications/' + BCEnvironment."Application Family" + '/environments/' + BCEnvironment.Name + '/sessions';
         AdminAPIClient.SetTenant(BCTenant);
         if AdminAPIClient.Get(Endpoint, JsonResponse) then begin
-
             if JsonResponse.Get('value', JsonToken) then begin
                 JsonArray := JsonToken.AsArray();
                 SessionCount := JsonArray.Count();
