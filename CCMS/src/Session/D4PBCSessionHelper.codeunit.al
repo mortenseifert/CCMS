@@ -1,16 +1,14 @@
 namespace D4P.CCMS.Session;
 
+using D4P.CCMS.Connector;
 using D4P.CCMS.Environment;
-using D4P.CCMS.General;
-using D4P.CCMS.Setup;
 using D4P.CCMS.Tenant;
 using System.Reflection;
-using System.Security.Authentication;
 
 codeunit 62017 "D4P BC Session Helper"
 {
     var
-        APIHelper: Codeunit "D4P BC API Helper";
+        AdminAPIClient: Codeunit D4PBCAdminAPIClient;
 
     procedure GetSessions(var BCEnvironment: Record "D4P BC Environment")
     var
@@ -25,7 +23,6 @@ codeunit 62017 "D4P BC Session Helper"
         ProcessingMsg: Label 'Retrieving sessions...\\Please wait.';
         SuccessMsg: Label '%1 session(s) retrieved successfully.', Comment = '%1 = Number of sessions';
         Endpoint: Text;
-        ResponseText: Text;
     begin
         ProgressDialog.Open(ProcessingMsg);
 
@@ -37,9 +34,8 @@ codeunit 62017 "D4P BC Session Helper"
 
         // Call Admin API to get sessions
         Endpoint := '/applications/' + BCEnvironment."Application Family" + '/environments/' + BCEnvironment.Name + '/sessions';
-        if APIHelper.SendAdminAPIRequest(BCTenant, 'GET', Endpoint, '', ResponseText) then begin
-            JsonResponse.ReadFrom(ResponseText);
-
+        AdminAPIClient.SetTenant(BCTenant);
+        if AdminAPIClient.Get(Endpoint, JsonResponse) then begin
             if JsonResponse.Get('value', JsonToken) then begin
                 JsonArray := JsonToken.AsArray();
                 SessionCount := JsonArray.Count();
@@ -55,7 +51,7 @@ codeunit 62017 "D4P BC Session Helper"
             end;
         end else begin
             ProgressDialog.Close();
-            Error(FailedToRetrieveErr, ResponseText);
+            Error(FailedToRetrieveErr, Format(JsonResponse));
         end;
     end;
 
@@ -68,16 +64,14 @@ codeunit 62017 "D4P BC Session Helper"
         SessionDetailsRefreshedMsg: Label 'Session details refreshed.';
         SessionDetailsRetrievedMsg: Label 'Session details retrieved.';
         Endpoint: Text;
-        ResponseText: Text;
     begin
         // Get the tenant record
         BCTenant.Get(BCEnvironment."Customer No.", BCEnvironment."Tenant ID");
 
         // Call Admin API to get session details
         Endpoint := '/applications/' + BCEnvironment."Application Family" + '/environments/' + BCEnvironment.Name + '/sessions/' + SessionId;
-        if APIHelper.SendAdminAPIRequest(BCTenant, 'GET', Endpoint, '', ResponseText) then begin
-            JsonResponse.ReadFrom(ResponseText);
-
+        AdminAPIClient.SetTenant(BCTenant);
+        if AdminAPIClient.Get(Endpoint, JsonResponse) then begin
             // Update or insert the session details
             if BCSession.Get(SessionId) then begin
                 ProcessSessionObject(BCEnvironment, JsonResponse, BCSession);
@@ -86,7 +80,7 @@ codeunit 62017 "D4P BC Session Helper"
             end else
                 Message(SessionDetailsRetrievedMsg);
         end else
-            Error(FailedToRetrieveErr, ResponseText);
+            Error(FailedToRetrieveErr, Format(JsonResponse));
     end;
 
     procedure DeleteSession(var BCEnvironment: Record "D4P BC Environment"; SessionId: Text)
@@ -112,7 +106,8 @@ codeunit 62017 "D4P BC Session Helper"
 
         // Call Admin API to delete session
         Endpoint := '/applications/' + BCEnvironment."Application Family" + '/environments/' + BCEnvironment.Name + '/sessions/' + SessionId;
-        if APIHelper.SendAdminAPIRequest(BCTenant, 'DELETE', Endpoint, '', ResponseText) then begin
+        AdminAPIClient.SetTenant(BCTenant);
+        if AdminAPIClient.Delete(Endpoint, ResponseText) then begin
             Message(SessionTerminatedMsg, SessionId);
             // Remove the session from the local table
             if BCSession.Get(SessionId) then

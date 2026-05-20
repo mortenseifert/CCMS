@@ -1,13 +1,13 @@
 namespace D4P.CCMS.Operations;
 
-using D4P.CCMS.General;
+using D4P.CCMS.Connector;
 using D4P.CCMS.Tenant;
 using System.Reflection;
 
 codeunit 62025 "D4P BC Operations Helper"
 {
     var
-        APIHelper: Codeunit "D4P BC API Helper";
+        AdminAPIClient: Codeunit D4PBCAdminAPIClient;
 
     /// <summary>
     /// Gets operations for a specific environment.
@@ -20,32 +20,27 @@ codeunit 62025 "D4P BC Operations Helper"
         BCTenant: Record "D4P BC Tenant";
         TenantNotFoundForCustomerErr: Label 'Tenant %1 not found for customer %2.', Comment = '%1 = Tenant ID, %2 = Customer No.';
         OperationFetchErr: Label 'Failed to retrieve operations for environment %1.', Comment = '%1 = Environment Name';
-        ResponseText: Text;
+        JsonResponse: JsonObject;
         Endpoint: Text;
     begin
         if not BCTenant.Get(CustomerNo, TenantID) then
             Error(TenantNotFoundForCustomerErr, TenantID, CustomerNo);
 
         Endpoint := '/applications/businesscentral/environments/' + EnvironmentName + '/operations';
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'GET', Endpoint, '', ResponseText) then
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Get(Endpoint, JsonResponse) then
             Error(OperationFetchErr, EnvironmentName);
 
-        if ResponseText <> '' then
-            ParseOperationsResponse(CustomerNo, Format(TenantID), ResponseText, EnvironmentName);
+        ParseOperationsResponse(CustomerNo, Format(TenantID), JsonResponse, EnvironmentName);
     end;
 
-    local procedure ParseOperationsResponse(CustomerNo: Code[20]; TenantID: Text[50]; ResponseText: Text; EnvironmentName: Text[100])
+    local procedure ParseOperationsResponse(CustomerNo: Code[20]; TenantID: Text[50]; JObject: JsonObject; EnvironmentName: Text[100])
     var
-        ParsingErr: Label 'Failed to parse response.';
         OperationsRetrievedMsg: Label '%1 operation(s) retrieved successfully.', Comment = '%1 = Number of operations';
-        JObject: JsonObject;
         JArray: JsonArray;
         JToken: JsonToken;
         i: Integer;
     begin
-        if not JObject.ReadFrom(ResponseText) then
-            Error(ParsingErr);
-
         if not JObject.Get('value', JToken) then
             exit;
 

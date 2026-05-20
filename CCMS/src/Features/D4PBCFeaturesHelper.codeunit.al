@@ -1,10 +1,9 @@
 namespace D4P.CCMS.Features;
 
+using D4P.CCMS.Connector;
 using D4P.CCMS.Environment;
-using D4P.CCMS.General;
 using D4P.CCMS.Setup;
 using D4P.CCMS.Tenant;
-using System.Security.Authentication;
 
 codeunit 62014 "D4P BC Features Helper"
 {
@@ -12,13 +11,11 @@ codeunit 62014 "D4P BC Features Helper"
     var
         BCEnvironment: Record "D4P BC Environment";
         BCTenant: Record "D4P BC Tenant";
-        APIHelper: Codeunit "D4P BC API Helper";
         APIRequestFailedErr: Label 'API request failed. Error details: %1', Comment = '%1 = Error message';
         EnvironmentNotFoundErr: Label 'Environment not found.';
         FailedToObtainTokenErr: Label 'Failed to obtain authentication token.';
         TenantNotFoundErr: Label 'Tenant not found.';
-        AuthToken: SecretText;
-        ResponseText: Text;
+        ResponseJson: JsonObject;
     begin
         // Find the environment
         BCEnvironment.SetRange("Customer No.", EnvironmentFeature."Customer No.");
@@ -31,33 +28,18 @@ codeunit 62014 "D4P BC Features Helper"
         if not BCTenant.Get(EnvironmentFeature."Customer No.", EnvironmentFeature."Tenant ID") then
             Error(TenantNotFoundErr);
 
-        // Get OAuth token using the AAD Tenant ID (Entra ID) from the environment
-        AuthToken := APIHelper.GetAutomationApiOAuthToken(BCEnvironment."AAD Tenant ID", BCTenant."Client ID", BCTenant.GetClientSecret());
-        if AuthToken.IsEmpty() then
-            Error(FailedToObtainTokenErr);
-
         // Get companies first
-        if not APIHelper.SendAutomationAPIRequest(
-            BCEnvironment."AAD Tenant ID",
-            BCEnvironment.Name,
-            'GET',
-            '/api/microsoft/automation/v2.0/companies',
-            '',
-            AuthToken,
-            ResponseText)
-        then
-            Error(APIRequestFailedErr, ResponseText);
+        AutomationAPIClient.SetContext(BCTenant, BCEnvironment);
+        if not AutomationAPIClient.Get('/api/microsoft/automation/v2.0/companies', ResponseJson) then
+            Error(APIRequestFailedErr, Format(ResponseJson));
 
-        ShowDebugMessage(ResponseText, 'Get Companies');
         // Now get features using the first company
-        GetFeaturesForCompany(ResponseText, AuthToken, BCEnvironment, EnvironmentFeature);
+        GetFeaturesForCompany(ResponseJson, BCTenant, BCEnvironment, EnvironmentFeature);
     end;
 
-    local procedure GetFeaturesForCompany(CompaniesResponse: Text; AuthToken: SecretText; BCEnvironment: Record "D4P BC Environment"; var EnvironmentFeature: Record "D4P BC Environment Feature")
+    local procedure GetFeaturesForCompany(CompaniesResponse: JsonObject; BCTenant: Record "D4P BC Tenant"; BCEnvironment: Record "D4P BC Environment"; var EnvironmentFeature: Record "D4P BC Environment Feature")
     var
-        APIHelper: Codeunit "D4P BC API Helper";
         JArray: JsonArray;
-        JObject: JsonObject;
         JToken: JsonToken;
         CouldNotFindCompanyErr: Label 'Could not find company ID in response.';
         FailedToParseErr: Label 'Failed to parse companies response.';
@@ -66,13 +48,10 @@ codeunit 62014 "D4P BC Features Helper"
         NoValueArrayErr: Label 'No value array found in companies response.';
         CompanyId: Text;
         Endpoint: Text;
-        ResponseText: Text;
+        ResponseJson: JsonObject;
     begin
         // Parse companies response to get the first company ID
-        if not JObject.ReadFrom(CompaniesResponse) then
-            Error(FailedToParseErr);
-
-        if not JObject.Get('value', JToken) then
+        if not CompaniesResponse.Get('value', JToken) then
             Error(NoValueArrayErr);
 
         JArray := JToken.AsArray();
@@ -81,9 +60,9 @@ codeunit 62014 "D4P BC Features Helper"
 
         // Get the first company ID
         JArray.Get(0, JToken);
-        JObject := JToken.AsObject();
+        CompaniesResponse := JToken.AsObject();
 
-        if JObject.Get('id', JToken) then
+        if CompaniesResponse.Get('id', JToken) then
             CompanyId := JToken.AsValue().AsText()
         else
             Error(CouldNotFindCompanyErr);
@@ -91,28 +70,18 @@ codeunit 62014 "D4P BC Features Helper"
         // Build features endpoint
         Endpoint := StrSubstNo('/api/microsoft/automation/v2.0/companies(%1)/features', CompanyId);
 
-        // Make GET request for features
-        if not APIHelper.SendAutomationAPIRequest(
-            BCEnvironment."AAD Tenant ID",
-            BCEnvironment.Name,
-            'GET',
-            Endpoint,
-            '',
-            AuthToken,
-            ResponseText)
-        then
-            Error(FeaturesAPIFailedErr, ResponseText);
+        AutomationAPIClient.SetContext(BCTenant, BCEnvironment);
+        if not AutomationAPIClient.Get(Endpoint, ResponseJson) then
+            Error(FeaturesAPIFailedErr, Format(ResponseJson));
 
-        ShowDebugMessage(ResponseText, 'Get Features');
-        ProcessFeaturesResponse(ResponseText, EnvironmentFeature);
+        ProcessFeaturesResponse(ResponseJson, EnvironmentFeature);
     end;
 
-    local procedure ProcessFeaturesResponse(ResponseText: Text; var EnvironmentFeature: Record "D4P BC Environment Feature")
+    local procedure ProcessFeaturesResponse(Features: JsonObject; var EnvironmentFeature: Record "D4P BC Environment Feature")
     var
         Feature: Record "D4P BC Environment Feature";
         i: Integer;
         JArray: JsonArray;
-        JObject: JsonObject;
         JToken: JsonToken;
         JValue: JsonValue;
         FailedToParseErr: Label 'Failed to parse features JSON response.';
@@ -124,11 +93,7 @@ codeunit 62014 "D4P BC Features Helper"
         Feature.SetRange("Environment Name", EnvironmentFeature."Environment Name");
         Feature.DeleteAll();
 
-        // Parse JSON response
-        if not JObject.ReadFrom(ResponseText) then
-            Error(FailedToParseErr);
-
-        if not JObject.Get('value', JToken) then
+        if not Features.Get('value', JToken) then
             Error(NoValueArrayErr);
 
         JArray := JToken.AsArray();
@@ -136,7 +101,7 @@ codeunit 62014 "D4P BC Features Helper"
         // Process each feature
         for i := 0 to JArray.Count() - 1 do begin
             JArray.Get(i, JToken);
-            JObject := JToken.AsObject();
+            Features := JToken.AsObject();
 
             Feature.Init();
             Feature."Customer No." := EnvironmentFeature."Customer No.";
@@ -144,62 +109,62 @@ codeunit 62014 "D4P BC Features Helper"
             Feature."Environment Name" := EnvironmentFeature."Environment Name";
 
             // Get feature key (id)
-            if JObject.Get('id', JToken) then begin
+            if Features.Get('id', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Feature Key" := CopyStr(JValue.AsText(), 1, MaxStrLen(Feature."Feature Key"));
                 Feature."Feature Name" := Feature."Feature Key"; // Use key as name initially
             end;
 
             // Get enabled status (text field: "All Users", "None", etc.)
-            if JObject.Get('enabled', JToken) then begin
+            if Features.Get('enabled', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Is Enabled" := CopyStr(JValue.AsText(), 1, MaxStrLen(Feature."Is Enabled"));
             end;
 
             // Get description
-            if JObject.Get('description', JToken) then begin
+            if Features.Get('description', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Feature Description" := CopyStr(JValue.AsText(), 1, MaxStrLen(Feature."Feature Description"));
             end;
 
             // Get descriptionInEnglish
-            if JObject.Get('descriptionInEnglish', JToken) then begin
+            if Features.Get('descriptionInEnglish', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Description In English" := CopyStr(JValue.AsText(), 1, MaxStrLen(Feature."Description In English"));
             end;
 
             // Get learnMoreLink
-            if JObject.Get('learnMoreLink', JToken) then begin
+            if Features.Get('learnMoreLink', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Learn More Link" := CopyStr(JValue.AsText(), 1, MaxStrLen(Feature."Learn More Link"));
             end;
 
             // Get mandatoryBy
-            if JObject.Get('mandatoryBy', JToken) then begin
+            if Features.Get('mandatoryBy', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Mandatory By" := CopyStr(JValue.AsText(), 1, MaxStrLen(Feature."Mandatory By"));
             end;
 
             // Get mandatoryByVersion
-            if JObject.Get('mandatoryByVersion', JToken) then begin
+            if Features.Get('mandatoryByVersion', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Mandatory By Version" := CopyStr(JValue.AsText(), 1, MaxStrLen(Feature."Mandatory By Version"));
             end;
 
             // Get canTry
-            if JObject.Get('canTry', JToken) then begin
+            if Features.Get('canTry', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Can Try" := JValue.AsBoolean();
             end;
 
             // Get isOneWay
-            if JObject.Get('isOneWay', JToken) then begin
+            if Features.Get('isOneWay', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Is One Way" := JValue.AsBoolean();
             end;
 
             // Get dataUpdateRequired
-            if JObject.Get('dataUpdateRequired', JToken) then begin
+            if Features.Get('dataUpdateRequired', JToken) then begin
                 JValue := JToken.AsValue();
                 Feature."Data Update Required" := JValue.AsBoolean();
             end;
@@ -223,13 +188,11 @@ codeunit 62014 "D4P BC Features Helper"
     var
         BCEnvironment: Record "D4P BC Environment";
         BCTenant: Record "D4P BC Tenant";
-        APIHelper: Codeunit "D4P BC API Helper";
         EnvironmentNotFoundErr: Label 'Environment not found.';
         FailedToActivateErr: Label 'Failed to activate feature. Error details: %1', Comment = '%1 = Error message';
         FailedToObtainTokenErr: Label 'Failed to obtain authentication token.';
         FeatureActivatedMsg: Label 'Feature "%1" activated successfully.', Comment = '%1 = Feature Name';
         TenantNotFoundErr: Label 'Tenant not found.';
-        AuthToken: SecretText;
         CompanyId: Text;
         Endpoint: Text;
         RequestBody: Text;
@@ -246,13 +209,8 @@ codeunit 62014 "D4P BC Features Helper"
         if not BCTenant.Get(Feature."Customer No.", Feature."Tenant ID") then
             Error(TenantNotFoundErr);
 
-        // Get OAuth token
-        AuthToken := APIHelper.GetAutomationApiOAuthToken(BCEnvironment."AAD Tenant ID", BCTenant."Client ID", BCTenant.GetClientSecret());
-        if AuthToken.IsEmpty() then
-            Error(FailedToObtainTokenErr);
-
         // Get company ID
-        CompanyId := GetFirstCompanyId(BCEnvironment, AuthToken);
+        CompanyId := GetFirstCompanyId(BCTenant, BCEnvironment);
 
         // Build Activate API endpoint
         Endpoint := StrSubstNo('/api/microsoft/automation/v2.0/companies(%1)/features(''%2'')/Microsoft.NAV.Activate',
@@ -265,15 +223,8 @@ codeunit 62014 "D4P BC Features Helper"
             Format(StartDateTime, 0, 9));
 
         // Make POST request
-        if not APIHelper.SendAutomationAPIRequest(
-            BCEnvironment."AAD Tenant ID",
-            BCEnvironment.Name,
-            'POST',
-            Endpoint,
-            RequestBody,
-            AuthToken,
-            ResponseText)
-        then
+        AutomationAPIClient.SetContext(BCTenant, BCEnvironment);
+        if not AutomationAPIClient.Post(Endpoint, RequestBody, ResponseText) then
             Error(FailedToActivateErr, ResponseText);
 
         ShowDebugMessage(ResponseText, 'Activate Feature');
@@ -284,13 +235,11 @@ codeunit 62014 "D4P BC Features Helper"
     var
         BCEnvironment: Record "D4P BC Environment";
         BCTenant: Record "D4P BC Tenant";
-        APIHelper: Codeunit "D4P BC API Helper";
         EnvironmentNotFoundErr: Label 'Environment not found.';
         FailedToDeactivateErr: Label 'Failed to deactivate feature. Error details: %1', Comment = '%1 = Error message';
         FailedToObtainTokenErr: Label 'Failed to obtain authentication token.';
         FeatureDeactivatedMsg: Label 'Feature "%1" deactivated successfully.', Comment = '%1 = Feature Name';
         TenantNotFoundErr: Label 'Tenant not found.';
-        AuthToken: SecretText;
         CompanyId: Text;
         Endpoint: Text;
         ResponseText: Text;
@@ -306,13 +255,8 @@ codeunit 62014 "D4P BC Features Helper"
         if not BCTenant.Get(Feature."Customer No.", Feature."Tenant ID") then
             Error(TenantNotFoundErr);
 
-        // Get OAuth token
-        AuthToken := APIHelper.GetAutomationApiOAuthToken(BCEnvironment."AAD Tenant ID", BCTenant."Client ID", BCTenant.GetClientSecret());
-        if AuthToken.IsEmpty() then
-            Error(FailedToObtainTokenErr);
-
         // Get company ID
-        CompanyId := GetFirstCompanyId(BCEnvironment, AuthToken);
+        CompanyId := GetFirstCompanyId(BCTenant, BCEnvironment);
 
         // Build Deactivate API endpoint
         Endpoint := StrSubstNo('/api/microsoft/automation/v2.0/companies(%1)/features(''%2'')/Microsoft.NAV.Deactivate',
@@ -320,26 +264,18 @@ codeunit 62014 "D4P BC Features Helper"
             Feature."Feature Key");
 
         // Make POST request
-        if not APIHelper.SendAutomationAPIRequest(
-            BCEnvironment."AAD Tenant ID",
-            BCEnvironment.Name,
-            'POST',
-            Endpoint,
-            '',
-            AuthToken,
-            ResponseText)
-        then
+        AutomationAPIClient.SetContext(BCTenant, BCEnvironment);
+        if not AutomationAPIClient.Post(Endpoint, '', ResponseText) then
             Error(FailedToDeactivateErr, ResponseText);
 
         ShowDebugMessage(ResponseText, 'Deactivate Feature');
         Message(FeatureDeactivatedMsg, Feature."Feature Name");
     end;
 
-    local procedure GetFirstCompanyId(BCEnvironment: Record "D4P BC Environment"; AuthToken: SecretText): Text
+    local procedure GetFirstCompanyId(BCTenant: Record "D4P BC Tenant"; BCEnvironment: Record "D4P BC Environment"): Text
     var
-        APIHelper: Codeunit "D4P BC API Helper";
         JArray: JsonArray;
-        JObject: JsonObject;
+        ResponseJson: JsonObject;
         JToken: JsonToken;
         CouldNotFindCompanyErr: Label 'Could not find company ID in response.';
         FailedToGetCompanyErr: Label 'Failed to get company ID. Error details: %1', Comment = '%1 = Error message';
@@ -347,25 +283,13 @@ codeunit 62014 "D4P BC Features Helper"
         NoCompaniesErr: Label 'No companies found in the environment.';
         NoValueArrayErr: Label 'No value array found in companies response.';
         CompanyId: Text;
-        ResponseText: Text;
     begin
         // Get companies
-        if not APIHelper.SendAutomationAPIRequest(
-            BCEnvironment."AAD Tenant ID",
-            BCEnvironment.Name,
-            'GET',
-            '/api/microsoft/automation/v2.0/companies',
-            '',
-            AuthToken,
-            ResponseText)
-        then
-            Error(FailedToGetCompanyErr, ResponseText);
+        AutomationAPIClient.SetContext(BCTenant, BCEnvironment);
+        if not AutomationAPIClient.Get('/api/microsoft/automation/v2.0/companies', ResponseJson) then
+            Error(FailedToGetCompanyErr, Format(ResponseJson));
 
-        // Parse response
-        if not JObject.ReadFrom(ResponseText) then
-            Error(FailedToParseErr);
-
-        if not JObject.Get('value', JToken) then
+        if not ResponseJson.Get('value', JToken) then
             Error(NoValueArrayErr);
 
         JArray := JToken.AsArray();
@@ -374,12 +298,15 @@ codeunit 62014 "D4P BC Features Helper"
 
         // Get the first company ID
         JArray.Get(0, JToken);
-        JObject := JToken.AsObject();
-        if JObject.Get('id', JToken) then
+        ResponseJson := JToken.AsObject();
+        if ResponseJson.Get('id', JToken) then
             CompanyId := JToken.AsValue().AsText()
         else
             Error(CouldNotFindCompanyErr);
 
         exit(CompanyId);
     end;
+
+    var
+        AutomationAPIClient: Codeunit D4PBCAutomationAPIClient;
 }

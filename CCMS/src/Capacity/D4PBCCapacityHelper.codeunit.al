@@ -1,13 +1,13 @@
 namespace D4P.CCMS.Capacity;
 
+using D4P.CCMS.Connector;
 using D4P.CCMS.Environment;
-using D4P.CCMS.General;
 using D4P.CCMS.Tenant;
 
 codeunit 62018 "D4P BC Capacity Helper"
 {
     var
-        APIHelper: Codeunit "D4P BC API Helper";
+        AdminAPIClient: Codeunit D4PBCAdminAPIClient;
 
     procedure GetCapacityData(CustomerNo: Code[20]; TenantID: Guid)
     var
@@ -66,12 +66,10 @@ codeunit 62018 "D4P BC Capacity Helper"
         JsonResponse: JsonObject;
         JsonToken: JsonToken;
         JsonValue: JsonValue;
-        ResponseText: Text;
     begin
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'GET', '/environments/quotas', '', ResponseText) then
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Get('/environments/quotas', JsonResponse) then
             exit;
-
-        JsonResponse.ReadFrom(ResponseText);
 
         // Parse environmentsCount
         if JsonResponse.Get('environmentsCount', JsonToken) then begin
@@ -120,12 +118,10 @@ codeunit 62018 "D4P BC Capacity Helper"
         JsonArray: JsonArray;
         JsonResponse: JsonObject;
         JsonToken: JsonToken;
-        ResponseText: Text;
     begin
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'GET', '/environments/usedstorage', '', ResponseText) then
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Get('/environments/usedstorage', JsonResponse) then
             exit;
-
-        JsonResponse.ReadFrom(ResponseText);
 
         if JsonResponse.Get('value', JsonToken) then begin
             JsonArray := JsonToken.AsArray();

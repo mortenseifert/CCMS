@@ -1,15 +1,14 @@
 namespace D4P.CCMS.Environment;
 
+using D4P.CCMS.Connector;
 using D4P.CCMS.Extension;
-using D4P.CCMS.General;
 using D4P.CCMS.Setup;
 using D4P.CCMS.Tenant;
-using System.Security.Authentication;
 
 codeunit 62000 "D4P BC Environment Mgt"
 {
     var
-        APIHelper: Codeunit "D4P BC API Helper";
+        AdminAPIClient: Codeunit D4PBCAdminAPIClient;
 
     procedure ShowDebugMessagePublic(ResponseText: Text; ActionName: Text)
     begin
@@ -28,16 +27,14 @@ codeunit 62000 "D4P BC Environment Mgt"
         JsonTokenLoop: JsonToken;
         JsonValue: JsonValue;
         FailedToFetchErr: Label 'Failed to fetch data from Endpoint: %1', Comment = '%1 = Error message';
-        ResponseText: Text;
     begin
         BCEnvironment.SetRange("Customer No.", BCTenant."Customer No.");
         BCEnvironment.SetRange("Tenant ID", BCTenant."Tenant ID");
         BCEnvironment.DeleteAll();
 
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'GET', '/applications/businesscentral/environments', '', ResponseText) then
-            Error(FailedToFetchErr, ResponseText);
-
-        JsonResponse.ReadFrom(ResponseText);
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Get('/applications/businesscentral/environments', JsonResponse) then
+            Error(FailedToFetchErr, Format(JsonResponse));
 
         if JsonResponse.Get('value', JsonToken) then begin
             JsonArray := JsonToken.AsArray();
@@ -192,7 +189,6 @@ codeunit 62000 "D4P BC Environment Mgt"
         JsonTokenLoop: JsonToken;
         JsonValue: JsonValue;
         FailedToFetchErr: Label 'Failed to fetch data from Endpoint: %1', Comment = '%1 = Error message';
-        ResponseText: Text;
     begin
         BCTenant.Get(BCEnvironment."Customer No.", BCEnvironment."Tenant ID");
 
@@ -201,11 +197,10 @@ codeunit 62000 "D4P BC Environment Mgt"
         InstalledApp.SetRange("Environment Name", BCEnvironment.Name);
         InstalledApp.DeleteAll();
 
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'GET',
-            '/applications/businesscentral/environments/' + BCEnvironment.Name + '/apps', '', ResponseText) then
-            Error(FailedToFetchErr, ResponseText);
-
-        JsonResponse.ReadFrom(ResponseText);
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Get(
+            '/applications/businesscentral/environments/' + BCEnvironment.Name + '/apps', JsonResponse) then
+            Error(FailedToFetchErr, Format(JsonResponse));
 
         if JsonResponse.Get('value', JsonToken) then begin
             JsonArray := JsonToken.AsArray();
@@ -308,7 +303,6 @@ codeunit 62000 "D4P BC Environment Mgt"
         SelectedUpdateVersionFetchedMsg: Label 'Selected update version %1 has been fetched successfully.', Comment = '%1 = Version number';
         Endpoint: Text;
         expectedAvailability: Text;
-        ResponseText: Text;
         rolloutStatus: Text;
         targetVersion: Text;
         targetVersionType: Text;
@@ -317,9 +311,8 @@ codeunit 62000 "D4P BC Environment Mgt"
 
         // Call Admin API to get environment updates
         Endpoint := '/applications/' + BCEnvironment."Application Family" + '/environments/' + BCEnvironment.Name + '/updates';
-        if APIHelper.SendAdminAPIRequest(BCTenant, 'GET', Endpoint, '', ResponseText) then begin
-            JsonResponse.ReadFrom(ResponseText);
-
+        AdminAPIClient.SetTenant(BCTenant);
+        if AdminAPIClient.Get(Endpoint, JsonResponse) then begin
             if JsonResponse.Get('value', JsonToken) then begin
                 JsonArray := JsonToken.AsArray();
                 targetVersion := '';
@@ -430,7 +423,7 @@ codeunit 62000 "D4P BC Environment Mgt"
                     Message(NoAvailableUpdatesMsg);
         end else
             if ShowMessage then
-                Error(FailedToFetchErr, ResponseText);
+                Error(FailedToFetchErr, Format(JsonResponse));
     end;
 
     procedure GetAllAvailableAppUpdates(ShowProgressDialog: Boolean)
@@ -478,15 +471,13 @@ codeunit 62000 "D4P BC Environment Mgt"
         FailedToFetchErr: Label 'Failed to fetch data from Endpoint: %1', Comment = '%1 = Error message';
         NoAvailableUpdatesMsg: Label 'No available updates found for the selected environment.';
         appVersion: Text;
-        ResponseText: Text;
     begin
         BCTenant.Get(BCEnvironment."Customer No.", BCEnvironment."Tenant ID");
 
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'GET',
-            '/applications/businesscentral/environments/' + BCEnvironment.Name + '/apps/availableUpdates', '', ResponseText) then
-            Error(FailedToFetchErr, ResponseText);
-
-        JsonResponse.ReadFrom(ResponseText);
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Get(
+            '/applications/businesscentral/environments/' + BCEnvironment.Name + '/apps/availableUpdates', JsonResponse) then
+            Error(FailedToFetchErr, Format(JsonResponse));
 
         if JsonResponse.Get('value', JsonToken) then begin
             JsonArray := JsonToken.AsArray();
@@ -548,9 +539,11 @@ codeunit 62000 "D4P BC Environment Mgt"
         JsonObject.Add('allowPreviewVersion', false);
         JsonObject.Add('installOrUpdateNeededDependencies', true);
 
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'POST',
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Post(
             '/applications/businesscentral/environments/' + BCEnvironment.Name + '/apps/' + Format(AppId) + '/update',
-            Format(JsonObject), ResponseText) then
+            JsonObject, ResponseText)
+        then
             Error(FailedToUpdateErr, ResponseText);
 
         if showNotification then begin
@@ -570,9 +563,11 @@ codeunit 62000 "D4P BC Environment Mgt"
         JsonObject.Add('environmentType', Format(EnvironmentType));
         JsonObject.Add('countryCode', Localization);
 
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'PUT',
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Put(
             '/applications/businesscentral/environments/' + EnvironmentName,
-            Format(JsonObject), ResponseText) then
+            JsonObject, ResponseText)
+        then
             Error(FailedToCreateErr, ResponseText);
 
         Message(EnvironmentCreatedMsg, EnvironmentName);
@@ -588,9 +583,11 @@ codeunit 62000 "D4P BC Environment Mgt"
         JsonObject.Add('environmentName', NewEnvironmentName);
         JsonObject.Add('type', Format(NewEnvironmentType));
 
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'POST',
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Post(
             '/applications/businesscentral/environments/' + SourceEnvironmentName + '/copy',
-            Format(JsonObject), ResponseText) then
+            JsonObject, ResponseText)
+        then
             Error(FailedToCreateErr, ResponseText);
 
         Message(CopyEnvironmentScheduledMsg, SourceEnvironmentName, NewEnvironmentName);
@@ -605,9 +602,11 @@ codeunit 62000 "D4P BC Environment Mgt"
     begin
         JsonObject.Add('NewEnvironmentName', NewEnvironmentName);
 
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'POST',
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Post(
             '/applications/businesscentral/environments/' + SourceEnvironmentName + '/rename/',
-            Format(JsonObject), ResponseText) then
+            JsonObject, ResponseText)
+        then
             Error(FailedToRenameErr, ResponseText);
 
         Message(EnvironmentRenamedMsg, SourceEnvironmentName, NewEnvironmentName);
@@ -619,8 +618,9 @@ codeunit 62000 "D4P BC Environment Mgt"
         FailedToDeleteErr: Label 'Failed to delete environment: %1', Comment = '%1 = Error message';
         ResponseText: Text;
     begin
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'DELETE',
-            '/applications/businesscentral/environments/' + EnvironmentName, '', ResponseText) then
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Delete(
+            '/applications/businesscentral/environments/' + EnvironmentName, ResponseText) then
             Error(FailedToDeleteErr, ResponseText);
 
         Message(EnvironmentMarkedForDeletionMsg, EnvironmentName);
@@ -628,7 +628,6 @@ codeunit 62000 "D4P BC Environment Mgt"
 
     procedure GetAvailableUpdates(var BCEnvironment: Record "D4P BC Environment"; var TempAvailableUpdate: Record "D4P BC Available Update" temporary)
     var
-        BCSetup: Record "D4P BC Setup";
         BCTenant: Record "D4P BC Tenant";
         ProgressDialog: Dialog;
         CurrentUpdate: Integer;
@@ -647,10 +646,8 @@ codeunit 62000 "D4P BC Environment Mgt"
         NoUpdatesFoundMsg: Label 'No updates found in API response for environment %1.', Comment = '%1 = Environment Name';
         ProcessingUpdateMsg: Label 'Processing update #1#### of #2####: #3####################', Comment = '%1 = index, %2 = total number of updates, %3 = Progress bar';
         Endpoint: Text;
-        ResponseText: Text;
     begin
         BCTenant.Get(BCEnvironment."Customer No.", BCEnvironment."Tenant ID");
-        BCSetup.Get();
         TempAvailableUpdate.Reset();
         TempAvailableUpdate.DeleteAll();
 
@@ -659,16 +656,11 @@ codeunit 62000 "D4P BC Environment Mgt"
 
         // Call Admin API to get available updates
         Endpoint := '/applications/' + BCEnvironment."Application Family" + '/environments/' + BCEnvironment.Name + '/updates';
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'GET', Endpoint, '', ResponseText) then begin
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Get(Endpoint, JsonResponse) then begin
             ProgressDialog.Close();
-            Error(FailedToFetchErr, ResponseText);
+            Error(FailedToFetchErr, Format(JsonResponse));
         end;
-
-        // Debug mode: Show API response
-        if BCSetup."Debug Mode" then
-            Message('DEBUG - Get Available Updates:\%1', ResponseText);
-
-        JsonResponse.ReadFrom(ResponseText);
 
         if JsonResponse.Get('value', JsonToken) then begin
             JsonArray := JsonToken.AsArray();
@@ -794,7 +786,6 @@ codeunit 62000 "D4P BC Environment Mgt"
         UpdateScheduledMsg: Label 'Update to version %1 successfully scheduled for %2.', Comment = '%1 = Version, %2 = Date';
         UpdateSelectedMsg: Label 'Update to version %1 successfully selected. Expected availability: %2/%3.', Comment = '%1 = Version, %2 = Month, %3 = Year';
         Endpoint: Text;
-        RequestBody: Text;
         ResponseText: Text;
     begin
         BCTenant.Get(BCEnvironment."Customer No.", BCEnvironment."Tenant ID");
@@ -815,20 +806,15 @@ codeunit 62000 "D4P BC Environment Mgt"
             JsonObject.Add('scheduleDetails', JsonScheduleDetails);
         end;
 
-        JsonObject.WriteTo(RequestBody);
-
         // Debug mode: Show request body
         if BCSetup."Debug Mode" then
-            Message('DEBUG - Select Target Version Request:\Target Version: %1\Request Body: %2', TargetVersion, RequestBody);
+            Message('DEBUG - Select Target Version Request:\Target Version: %1\Request Body: %2', TargetVersion, Format(JsonObject));
 
         // Call Admin API to select target version
         Endpoint := '/applications/' + BCEnvironment."Application Family" + '/environments/' + BCEnvironment.Name + '/updates/' + TargetVersion;
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'PATCH', Endpoint, RequestBody, ResponseText) then
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Patch(Endpoint, JsonObject, ResponseText) then
             Error(FailedToSelectErr, ResponseText);
-
-        // Debug mode: Show API response
-        if BCSetup."Debug Mode" then
-            Message('DEBUG - Select Target Version Response:\%1', ResponseText);
 
         // Update environment record
         BCEnvironment."Target Version" := TargetVersion;
@@ -844,21 +830,6 @@ codeunit 62000 "D4P BC Environment Mgt"
         BCEnvironment.Modify();
     end;
 
-    procedure RescheduleBCEnvironmentUpgrade(var BCTenant: Record "D4P BC Tenant"; EnvironmentName: Text[100]; TargetVersion: Text[100]; UpgradeDate: DateTime)
-    var
-        EnvironmentUpgradeScheduledMsg: Label 'Environment %1 successfully scheduled for upgrade to version %2 on Date %3.', Comment = '%1 = Environment Name, %2 = Version, %3 = Date';
-        FailedToUpgradeErr: Label 'Failed to upgrade environment: %1', Comment = '%1 = Error message';
-        Endpoint: Text;
-        ResponseText: Text;
-    begin
-        // Call Admin API to reschedule environment upgrade
-        Endpoint := '/applications/businesscentral/environments/' + EnvironmentName + '/updates';
-        if APIHelper.SendAdminAPIRequest(BCTenant, 'PUT', Endpoint, '', ResponseText) then
-            Message(EnvironmentUpgradeScheduledMsg, EnvironmentName, TargetVersion, UpgradeDate)
-        else
-            Error(FailedToUpgradeErr, ResponseText);
-    end;
-
     procedure SetApplicationInsightsConnectionString(var BCEnvironment: Record "D4P BC Environment")
     var
         BCTenant: Record "D4P BC Tenant";
@@ -868,7 +839,6 @@ codeunit 62000 "D4P BC Environment Mgt"
         ConnectionStringSetMsg: Label 'Application Insights connection string successfully set for environment %1.', Comment = '%1 = Environment Name';
         FailedToSetKeyErr: Label 'Failed to set Application Insights key: %1', Comment = '%1 = Error message';
         Endpoint: Text;
-        RequestBody: Text;
         ResponseText: Text;
     begin
         BCTenant.Get(BCEnvironment."Customer No.", BCEnvironment."Tenant ID");
@@ -878,11 +848,11 @@ codeunit 62000 "D4P BC Environment Mgt"
 
         // Create JSON request body
         JsonObject.Add('key', BCEnvironment."Application Insights String");
-        JsonObject.WriteTo(RequestBody);
 
         // Call Admin API to set Application Insights key
         Endpoint := '/applications/businesscentral/environments/' + BCEnvironment.Name + '/settings/appinsightskey';
-        if APIHelper.SendAdminAPIRequest(BCTenant, 'POST', Endpoint, RequestBody, ResponseText) then begin
+        AdminAPIClient.SetTenant(BCTenant);
+        if AdminAPIClient.Post(Endpoint, JsonObject, ResponseText) then begin
             if IsRemoving then
                 Message(ConnectionStringRemovedMsg, BCEnvironment.Name)
             else

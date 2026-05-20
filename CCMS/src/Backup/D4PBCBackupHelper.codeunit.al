@@ -1,10 +1,8 @@
 namespace D4P.CCMS.Backup;
 
+using D4P.CCMS.Connector;
 using D4P.CCMS.Environment;
-using D4P.CCMS.General;
-using D4P.CCMS.Setup;
 using D4P.CCMS.Tenant;
-using System.Security.Authentication;
 
 codeunit 62015 "D4P BC Backup Helper"
 {
@@ -47,9 +45,11 @@ codeunit 62015 "D4P BC Backup Helper"
         JsonObject.Add('blob', BlobName);
 
         // Send API request
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'POST',
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Post(
             StrSubstNo('/exports/applications/businesscentral/environments/%1', BCEnvironment.Name),
-            Format(JsonObject), ResponseText) then
+            JsonObject, ResponseText)
+        then
             Error(FailedExportErr, ResponseText);
 
         Message(ExportStartedMsg, BCEnvironment.Name, BlobName);
@@ -65,33 +65,30 @@ codeunit 62015 "D4P BC Backup Helper"
         JsonValue: JsonValue;
         FailedMetricsErr: Label 'Failed to get export metrics: %1', Comment = '%1 = Error message';
         MetricsMsg: Label 'Export Metrics for %1:\Exports Per Month: %2\Exports Remaining This Month: %3', Comment = '%1 = Environment Name, %2 = Exports Per Month, %3 = Exports Remaining';
-        ParseMetricsErr: Label 'Failed to parse export metrics response.';
-        ResponseText: Text;
     begin
         BCTenant.Get(BCEnvironment."Customer No.", BCEnvironment."Tenant ID");
 
         // Send API request
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'GET',
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Get(
             StrSubstNo('/exports/applications/businesscentral/environments/%1/metrics', BCEnvironment.Name),
-            '', ResponseText) then
-            Error(FailedMetricsErr, ResponseText);
+            JsonResponse)
+        then
+            Error(FailedMetricsErr, Format(JsonResponse));
 
         // Parse response
-        if JsonResponse.ReadFrom(ResponseText) then begin
-            if JsonResponse.Get('exportsPerMonth', JsonToken) then begin
-                JsonValue := JsonToken.AsValue();
-                ExportsPerMonth := JsonValue.AsInteger();
-            end;
+        if JsonResponse.Get('exportsPerMonth', JsonToken) then begin
+            JsonValue := JsonToken.AsValue();
+            ExportsPerMonth := JsonValue.AsInteger();
+        end;
 
-            if JsonResponse.Get('exportsRemainingThisMonth', JsonToken) then begin
-                JsonValue := JsonToken.AsValue();
-                ExportsRemaining := JsonValue.AsInteger();
-            end;
+        if JsonResponse.Get('exportsRemainingThisMonth', JsonToken) then begin
+            JsonValue := JsonToken.AsValue();
+            ExportsRemaining := JsonValue.AsInteger();
+        end;
 
-            Message(MetricsMsg,
-                BCEnvironment.Name, ExportsPerMonth, ExportsRemaining);
-        end else
-            Error(ParseMetricsErr);
+        Message(MetricsMsg,
+            BCEnvironment.Name, ExportsPerMonth, ExportsRemaining);
     end;
 
     procedure GetExportHistory(var BCEnvironment: Record "D4P BC Environment"; StartTime: DateTime; EndTime: DateTime)
@@ -107,9 +104,7 @@ codeunit 62015 "D4P BC Backup Helper"
         JsonValue: JsonValue;
         FailedHistoryErr: Label 'Failed to get export history: %1', Comment = '%1 = Error message';
         HistorySuccessMsg: Label 'Export history retrieved successfully. Found %1 export(s) for %2.', Comment = '%1 = Number of exports, %2 = Environment Name';
-        ParseHistoryErr: Label 'Failed to parse export history response.';
         EndTimeText: Text;
-        ResponseText: Text;
         StartTimeText: Text;
     begin
         BCTenant.Get(BCEnvironment."Customer No.", BCEnvironment."Tenant ID");
@@ -125,86 +120,85 @@ codeunit 62015 "D4P BC Backup Helper"
         BCBackup.DeleteAll();
 
         // Send API request
-        if not APIHelper.SendAdminAPIRequest(BCTenant, 'GET',
-            '/exports/history?start=' + StartTimeText + '&end=' + EndTimeText,
-            '', ResponseText) then
-            Error(FailedHistoryErr, ResponseText);
+        AdminAPIClient.SetTenant(BCTenant);
+        if not AdminAPIClient.Get(
+            StrSubstNo('/exports/applications/businesscentral/environments/%1/history?start=%2&end=%3', BCEnvironment.Name, StartTimeText, EndTimeText),
+            JsonResponse)
+        then
+            Error(FailedHistoryErr, Format(JsonResponse));
 
         // Parse response and populate backup records
-        if JsonResponse.ReadFrom(ResponseText) then begin
-            if JsonResponse.Get('value', JsonToken) then begin
-                JsonArray := JsonToken.AsArray();
+        if JsonResponse.Get('value', JsonToken) then begin
+            JsonArray := JsonToken.AsArray();
 
-                foreach JsonTokenLoop in JsonArray do begin
-                    JsonObjectLoop := JsonTokenLoop.AsObject();
-                    BCBackup.Init();
-                    BCBackup."Customer No." := BCEnvironment."Customer No.";
-                    BCBackup."Tenant ID" := Format(BCEnvironment."Tenant ID");
+            foreach JsonTokenLoop in JsonArray do begin
+                JsonObjectLoop := JsonTokenLoop.AsObject();
+                BCBackup.Init();
+                BCBackup."Customer No." := BCEnvironment."Customer No.";
+                BCBackup."Tenant ID" := Format(BCEnvironment."Tenant ID");
 
-                    if JsonObjectLoop.Get('environmentName', JsonToken) then begin
-                        JsonValue := JsonToken.AsValue();
-                        BCBackup."Environment Name" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Environment Name"));
-                    end;
-
-                    // Skip exports from other environments
-                    if BCBackup."Environment Name" <> BCEnvironment.Name then
-                        continue;
-
-                    if JsonObjectLoop.Get('applicationType', JsonToken) then begin
-                        JsonValue := JsonToken.AsValue();
-                        BCBackup."Application Type" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Application Type"));
-                    end;
-
-                    if JsonObjectLoop.Get('applicationVersion', JsonToken) then begin
-                        JsonValue := JsonToken.AsValue();
-                        BCBackup."Application Version" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Application Version"));
-                    end;
-
-                    if JsonObjectLoop.Get('country', JsonToken) then begin
-                        JsonValue := JsonToken.AsValue();
-                        BCBackup."Country Code" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Country Code"));
-                    end;
-
-                    if JsonObjectLoop.Get('time', JsonToken) then begin
-                        JsonValue := JsonToken.AsValue();
-                        if Evaluate(BCBackup."Export Time", JsonValue.AsText()) then;
-                    end;
-
-                    if JsonObjectLoop.Get('storageAccount', JsonToken) then begin
-                        JsonValue := JsonToken.AsValue();
-                        BCBackup."Storage Account" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Storage Account"));
-                    end;
-
-                    if JsonObjectLoop.Get('container', JsonToken) then begin
-                        JsonValue := JsonToken.AsValue();
-                        BCBackup."Container" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Container"));
-                    end;
-
-                    if JsonObjectLoop.Get('blob', JsonToken) then begin
-                        JsonValue := JsonToken.AsValue();
-                        BCBackup."Blob" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Blob"));
-                    end;
-
-                    if JsonObjectLoop.Get('user', JsonToken) then begin
-                        JsonValue := JsonToken.AsValue();
-                        BCBackup."Exported By" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Exported By"));
-                    end;
-
-                    // Use blob name as unique Export ID (it's already unique per export)
-                    BCBackup."Export ID" := CopyStr(BCBackup."Blob", 1, MaxStrLen(BCBackup."Export ID"));
-
-                    BCBackup."Export Status" := Enum::"D4P Export Status"::Completed;
-
-                    BCBackup.Insert(true);
-                    InsertedCount += 1;
+                if JsonObjectLoop.Get('environmentName', JsonToken) then begin
+                    JsonValue := JsonToken.AsValue();
+                    BCBackup."Environment Name" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Environment Name"));
                 end;
 
-                Message(HistorySuccessMsg, InsertedCount, BCEnvironment.Name);
+                // Skip exports from other environments
+                if BCBackup."Environment Name" <> BCEnvironment.Name then
+                    continue;
+
+                if JsonObjectLoop.Get('applicationType', JsonToken) then begin
+                    JsonValue := JsonToken.AsValue();
+                    BCBackup."Application Type" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Application Type"));
+                end;
+
+                if JsonObjectLoop.Get('applicationVersion', JsonToken) then begin
+                    JsonValue := JsonToken.AsValue();
+                    BCBackup."Application Version" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Application Version"));
+                end;
+
+                if JsonObjectLoop.Get('country', JsonToken) then begin
+                    JsonValue := JsonToken.AsValue();
+                    BCBackup."Country Code" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Country Code"));
+                end;
+
+                if JsonObjectLoop.Get('time', JsonToken) then begin
+                    JsonValue := JsonToken.AsValue();
+                    if Evaluate(BCBackup."Export Time", JsonValue.AsText()) then;
+                end;
+
+                if JsonObjectLoop.Get('storageAccount', JsonToken) then begin
+                    JsonValue := JsonToken.AsValue();
+                    BCBackup."Storage Account" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Storage Account"));
+                end;
+
+                if JsonObjectLoop.Get('container', JsonToken) then begin
+                    JsonValue := JsonToken.AsValue();
+                    BCBackup."Container" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Container"));
+                end;
+
+                if JsonObjectLoop.Get('blob', JsonToken) then begin
+                    JsonValue := JsonToken.AsValue();
+                    BCBackup."Blob" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Blob"));
+                end;
+
+                if JsonObjectLoop.Get('user', JsonToken) then begin
+                    JsonValue := JsonToken.AsValue();
+                    BCBackup."Exported By" := CopyStr(JsonValue.AsText(), 1, MaxStrLen(BCBackup."Exported By"));
+                end;
+
+                // Use blob name as unique Export ID (it's already unique per export)
+                BCBackup."Export ID" := CopyStr(BCBackup."Blob", 1, MaxStrLen(BCBackup."Export ID"));
+
+                BCBackup."Export Status" := Enum::"D4P Export Status"::Completed;
+
+                BCBackup.Insert(true);
+                InsertedCount += 1;
             end;
-        end else
-            Error(ParseHistoryErr);
+
+            Message(HistorySuccessMsg, InsertedCount, BCEnvironment.Name);
+        end;
     end;
 
     var
-        APIHelper: Codeunit "D4P BC API Helper";
+        AdminAPIClient: Codeunit D4PBCAdminAPIClient;
 }

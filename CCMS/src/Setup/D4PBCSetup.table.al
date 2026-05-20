@@ -71,7 +71,7 @@ table 62009 "D4P BC Setup"
             exit(false);
     end;
 
-    procedure GetAdminAPIBaseUrl(): Text[250]
+    procedure GetAdminAPIBaseUrl(): Text
     var
         BCSetup: Record "D4P BC Setup";
     begin
@@ -83,11 +83,15 @@ table 62009 "D4P BC Setup"
         exit(BCSetup."Admin API Base URL");
     end;
 
-    procedure GetAutomationAPIBaseUrl(): Text[250]
+    procedure GetAutomationAPIBaseUrl(): Text
     var
         BCSetup: Record "D4P BC Setup";
     begin
         BCSetup := GetSetup();
+        if BCSetup."Automation API Base URL" = '' then begin
+            BCSetup.Validate("Automation API Base URL", AutomationAPIBaseURLTok);
+            BCSetup.Modify(true);
+        end;
         exit(BCSetup."Automation API Base URL");
     end;
 
