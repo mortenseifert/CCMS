@@ -17,10 +17,13 @@ codeunit 62036 D4PBCAdminAPIClient
         NotInitializedErr: Label 'Admin API Client is not initialized. Call SetTenant before making API requests.';
 
     procedure SetTenant(BCTenant: Record "D4P BC Tenant")
+    var
+        D4PBCAccessTokenHandler: Codeunit D4PBCAccessTokenHandler;
     begin
         if IsInitialized and (CurrentTenantId = BCTenant."Tenant ID") then
             exit;
 
+        D4PBCAccessTokenHandler.SetTenant(BCTenant."Tenant ID");
         RestClient := AdminRestClientFactory.CreateRestClient(BCTenant);
         CurrentTenantId := BCTenant."Tenant ID";
         IsInitialized := true;

@@ -22,11 +22,22 @@ codeunit 62033 D4PBCHttpClientHandler implements "Http Client Handler"
         RequestMessage: HttpRequestMessage;
         ResponseMessage: HttpResponseMessage;
     begin
+        SetBearer(HttpRequestMessage);
         RequestMessage := HttpRequestMessage.GetHttpRequestMessage();
         Success := CurrHttpClientInstance.Send(RequestMessage, ResponseMessage);
         HttpResponseMessage.SetResponseMessage(ResponseMessage);
 
         if DebugMode then
             Message(DebugMsg, HttpRequestMessage.GetHttpMethod() + ' ' + HttpRequestMessage.GetRequestUri(), HttpResponseMessage.GetContent().AsText());
+    end;
+
+    local procedure SetBearer(HttpRequestMessage: Codeunit "Http Request Message")
+    var
+        D4PBCAccessTokenHandler: Codeunit D4PBCAccessTokenHandler;
+        SecretHeaders: List of [SecretText];
+    begin
+        SecretHeaders := HttpRequestMessage.GetSecretHeaderValues('Authorization');
+        SecretHeaders.RemoveAt(1);
+        HttpRequestMessage.SetHeader('Authorization', D4PBCAccessTokenHandler.GetAccessToken());
     end;
 }
